@@ -1,16 +1,16 @@
 import cv2
 from detection.face_detector import FaceDetector
+from detection.head_pose import HeadPoseEstimator
 from analysis.eye_analysis import calculate_ear
 from analysis.blink_analysis import BlinkAnalyzer
 from analysis.yawn_analysis import YawnAnalyzer
 
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
-# Sırasıyla: Sol köşe, Sağ köşe, Üst iç dudak, Alt iç dudak
 MOUTH_INDICES = [78, 308, 13, 14]
+HEAD_POSE_INDICES = [1, 152, 33, 263, 61, 291]
 
 def get_coords(landmarks, indices):
-    """Belirli indekslere sahip landmarkların (x,y) koordinatlarını listeler."""
     coords = []
     for idx in indices:
         for lm in landmarks:
@@ -25,6 +25,7 @@ def main():
     
     blink_analyzer = BlinkAnalyzer(ear_threshold=0.22, fatigue_frames=20)
     yawn_analyzer = YawnAnalyzer(mar_threshold=0.5, yawn_frames=15)
+    head_pose_estimator = HeadPoseEstimator()
 
     if not cap.isOpened():
         print("Hata: Kamera açılamadı!")
@@ -34,13 +35,31 @@ def main():
         ret, frame = cap.read()
         if not ret: break
 
+        # Baş pozisyonu analizi daha iyi çalışması için görüntüyü aynalayalım (Opsiyonel ama mantıklı)
+        frame = cv2.flip(frame, 1)
+        
         frame, landmarks = detector.find_face_mesh(frame, draw=False)
 
         if len(landmarks) != 0:
             right_eye = get_coords(landmarks, RIGHT_EYE_INDICES)
             left_eye = get_coords(landmarks, LEFT_EYE_INDICES)
             mouth = get_coords(landmarks, MOUTH_INDICES)
+            head_points = get_coords(landmarks, HEAD_POSE_INDICES)
             
+            # Baş pozisyonu işlemleri
+            if len(head_points) == 6:
+                # Modülden hem yönü hem de açıları alıyoruz
+                direction, pitch, yaw = head_pose_estimator.estimate_pose(head_points, frame.shape)
+                
+                # Yönü ve anlık açıları ekrana yazdırıyoruz
+                cv2.putText(frame, f"Bas Yonu: {direction}", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 105, 180), 2)
+                cv2.putText(frame, f"Pitch: {pitch:.0f} Yaw: {yaw:.0f}", (20, 190), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 105, 180), 1)
+                
+                # Sürücü "On" (Ön) dışında bir yere bakıyorsa uyarı ver
+                if direction != "On":
+                    cv2.putText(frame, "DIKKAT: YOLA BAKIN!", (50, 350), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+
             # Göz işlemleri
             if len(right_eye) == 6 and len(left_eye) == 6:
                 right_ear = calculate_ear(right_eye)
@@ -68,7 +87,7 @@ def main():
                     cv2.putText(frame, "ESNEME TESPIT EDILDI", (50, 300), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 3)
 
-        cv2.imshow('Surucu Yorgunluk Tespit Sistemi - Faz 5', frame)
+        cv2.imshow('Surucu Yorgunluk Tespit Sistemi - Faz 6', frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
