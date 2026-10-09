@@ -6,6 +6,7 @@ from analysis.eye_analysis import calculate_ear
 from analysis.blink_analysis import BlinkAnalyzer
 from analysis.yawn_analysis import YawnAnalyzer
 from alerts.audio_alert import AudioAlert
+from database.db_logger import DatabaseLogger
 
 RIGHT_EYE_INDICES = [33, 160, 158, 133, 153, 144]
 LEFT_EYE_INDICES = [362, 385, 387, 263, 373, 380]
@@ -29,13 +30,20 @@ def main():
     yawn_analyzer = YawnAnalyzer(mar_threshold=0.5, yawn_frames=15)
     head_pose_estimator = HeadPoseEstimator()
     audio_alert = AudioAlert()
+    
+    # Veritabanı bağlantımızı başlatıyoruz
+    db_logger = DatabaseLogger()
 
     if not cap.isOpened():
         print("Hata: Kamera açılamadı!")
         return
 
-    # FPS hesaplaması için önceki zaman değişkeni
     pTime = 0
+    
+    # Olayları veritabanına saniyede onlarca kez spamlamamak için durum tutucular
+    logged_fatigue = False
+    logged_yawn = False
+    logged_distraction = False
 
     while True:
         ret, frame = cap.read()
@@ -44,7 +52,6 @@ def main():
         frame = cv2.flip(frame, 1)
         frame, landmarks = detector.find_face_mesh(frame, draw=False)
         
-        # Tehlike durumu bayrağı (her döngüde sıfırlanır)
         danger_detected = False
 
         if len(landmarks) != 0:
@@ -61,6 +68,13 @@ def main():
                 if direction != "On":
                     danger_detected = True
                     cv2.putText(frame, "DIKKAT: YOLA BAKIN!", (50, 350), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                    
+                    # Sadece yeni bir dikkat dağınıklığı başladığında logla
+                    if not logged_distraction:
+                        db_logger.log_event("Dikkat Daginikligi", f"Yon: {direction}")
+                        logged_distraction = True
+                else:
+                    logged_distraction = False # Öne döndüğünde sıfırla
 
             # 2. Göz İşlemleri
             if len(right_eye) == 6 and len(left_eye) == 6:
@@ -75,6 +89,12 @@ def main():
                 if is_fatigued:
                     danger_detected = True
                     cv2.putText(frame, "DIKKAT: UYUKLAMA TESPIT EDILDI!", (50, 250), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                    
+                    if not logged_fatigue:
+                        db_logger.log_event("Uyuklama", f"EAR: {avg_ear:.2f}")
+                        logged_fatigue = True
+                else:
+                    logged_fatigue = False
 
             # 3. Ağız İşlemleri
             if len(mouth) == 4:
@@ -87,18 +107,21 @@ def main():
                 if is_yawning:
                     danger_detected = True
                     cv2.putText(frame, "ESNEME TESPIT EDILDI", (50, 300), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 165, 255), 3)
+                    
+                    if not logged_yawn:
+                        db_logger.log_event("Esneme", f"MAR: {mar_value:.2f}")
+                        logged_yawn = True
+                else:
+                    logged_yawn = False
 
-        # Eğer herhangi bir tehlike varsa alarm çal
         if danger_detected:
             audio_alert.trigger_alarm()
 
-        # FPS Hesaplama ve Ekrana Yazdırma
         cTime = time.time()
         fps = 1 / (cTime - pTime)
         pTime = cTime
         cv2.putText(frame, f"FPS: {int(fps)}", (20, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
-        # Arayüz başlığını güncelliyoruz
         cv2.imshow('Fatih Saltan - Surucu Yorgunluk Tespit Sistemi', frame)
 
         if cv2.waitKey(1) & 0xFF == ord('q'):
